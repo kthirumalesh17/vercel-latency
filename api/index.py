@@ -24,6 +24,7 @@ class Request(BaseModel):
 
 @app.post("/api")
 @app.post("/")
+@app.post("/check")
 def analyze(req: Request):
     result = []
     for region in req.regions:
