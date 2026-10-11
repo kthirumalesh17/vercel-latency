@@ -1,31 +1,29 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List
-import json, os, statistics
+import json, os
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load telemetry data
 DATA_PATH = os.path.join(os.path.dirname(__file__), "latency.json")
 with open(DATA_PATH) as f:
     TELEMETRY = json.load(f)
 
-class Request(BaseModel):
+class AnalyticsRequest(BaseModel):
     regions: List[str]
     threshold_ms: float
 
-@app.post("/api")
-@app.post("/")
-@app.post("/check")
-def analyze(req: Request):
+def compute(req: AnalyticsRequest):
     result = []
     for region in req.regions:
         records = [r for r in TELEMETRY if r["region"] == region]
@@ -35,9 +33,7 @@ def analyze(req: Request):
         uptimes = [r["uptime_pct"] for r in records]
         sorted_lat = sorted(latencies)
         n = len(sorted_lat)
-        idx = int(0.95 * n)
-        if idx >= n:
-            idx = n - 1
+        idx = min(int(0.95 * n), n - 1)
         p95 = sorted_lat[idx]
         result.append({
             "region": region,
@@ -47,3 +43,20 @@ def analyze(req: Request):
             "breaches": sum(1 for l in latencies if l > req.threshold_ms),
         })
     return result
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+}
+
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    return JSONResponse(content={}, headers=CORS_HEADERS)
+
+@app.post("/api")
+@app.post("/")
+@app.post("/check")
+async def analyze(req: AnalyticsRequest):
+    result = compute(req)
+    return JSONResponse(content=result, headers=CORS_HEADERS)
