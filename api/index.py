@@ -1,49 +1,41 @@
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import List
 import json, os
+from typing import List
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "latency.json")
-with open(DATA_PATH) as f:
+with open(os.path.join(os.path.dirname(__file__), "latency.json")) as f:
     TELEMETRY = json.load(f)
 
 class AnalyticsRequest(BaseModel):
     regions: List[str]
     threshold_ms: float
 
-CORS = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-}
+def percentile(values, p):
+    s = sorted(values)
+    k = (len(s) - 1) * p / 100
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    return s[f] + (s[c] - s[f]) * (k - f)
 
-@app.options("/{path:path}")
-async def preflight(path: str):
-    return JSONResponse(content={}, headers=CORS)
-
-@app.post("/api")
 @app.post("/")
-@app.post("/check")
-async def analyze(req: AnalyticsRequest):
+@app.post("/api")
+def analyze(req: AnalyticsRequest):
     result = []
     for region in req.regions:
-        records = [r for r in TELEMETRY if r["region"] == region]
-        if not records:
+        rows = [r for r in TELEMETRY if str(r["region"]).lower() == region.lower()]
+        if not rows:
             continue
-        latencies = [r["latency_ms"] for r in records]
-        uptimes = [r["uptime_pct"] for r in records]
-        sorted_lat = sorted(latencies)
-        n = len(sorted_lat)
-        idx = min(int(0.95 * n), n - 1)
-        p95 = sorted_lat[idx]
+        lat = [r["latency_ms"] for r in rows]
+        up = [r["uptime_pct"] for r in rows]
         result.append({
             "region": region,
-            "avg_latency": round(sum(latencies) / len(latencies), 4),
-            "p95_latency": round(p95, 4),
-            "avg_uptime": round(sum(uptimes) / len(uptimes), 4),
-            "breaches": sum(1 for l in latencies if l > req.threshold_ms),
+            "avg_latency": round(sum(lat) / len(lat), 4),
+            "p95_latency": round(percentile(lat, 95), 4),
+            "avg_uptime": round(sum(up) / len(up), 4),
+            "breaches": sum(1 for x in lat if x > req.threshold_ms),
         })
-    return JSONResponse(content=result, headers=CORS)
+    return result
